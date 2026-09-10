@@ -57,12 +57,12 @@ function GiftsPage() {
 
   const handleChoose = (to: string) => {
     if (leaving) return
-    // First rotate the chosen image so it's clearly visible...
+    // 1. Spin the chosen image one full round (0.7s).
     setChosen(to)
-    // ...then start fading the page out after the spin has begun.
-    window.setTimeout(() => setLeaving(true), 350)
-    // Navigate once both the spin and fade have played.
-    window.setTimeout(() => navigate(to), 1000)
+    // 2. After the spin finishes, fade the whole page out (0.7s).
+    window.setTimeout(() => setLeaving(true), 700)
+    // 3. Once faded out, navigate; the next page fades itself in.
+    window.setTimeout(() => navigate(to), 1400)
   }
 
   return (

@@ -183,7 +183,7 @@ body {
   background: none;
   border: none;
   cursor: pointer;
-  transition: transform 0.6s ease;
+  transition: transform 0.3s ease;
 }
 
 .gift-img {
@@ -203,10 +203,19 @@ body {
   transform: scale(1.2);
 }
 
-/* When chosen: rotate to the right, then it fades with the page. */
+/* When chosen: spin one full round, then the page fades out. */
 .gift-emoji--chosen {
-  transform: rotate(90deg) scale(1.25);
+  animation: spinOnce 0.7s ease-in-out forwards;
   z-index: 2;
+}
+
+@keyframes spinOnce {
+  from {
+    transform: rotate(0deg) scale(1.1);
+  }
+  to {
+    transform: rotate(360deg) scale(1.1);
+  }
 }
 
 /* Whole-page fade out before navigating. */
