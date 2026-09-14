@@ -1,5 +1,26 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import BackgroundMusic from '../components/BackgroundMusic.tsx'
+import img2022 from '../assets/2022.jpeg'
+import img2023 from '../assets/2023.jpeg'
+import img2024 from '../assets/2024.jpeg'
+import img2025 from '../assets/2025.jpeg'
+import img2026 from '../assets/2026.jpeg'
+
+// Maps a year to its photo. Only these years have an image to show beside the text.
+const yearImages: Record<string, string> = {
+  '2022': img2022,
+  '2023': img2023,
+  '2024': img2024,
+  '2025': img2025,
+  '2026': img2026,
+}
+
+// Pulls a 4-digit year out of a segment, e.g. "2022," -> "2022".
+function getYear(sentence: string): string | null {
+  const match = sentence.match(/\b(20\d{2})\b/)
+  return match ? match[1] : null
+}
 
 // The letter, split at every full stop and comma. Each entry shows one at a time.
 const sentences = [
@@ -55,6 +76,10 @@ function EnvelopePage() {
 
   const isLast = index === sentences.length - 1
 
+  // If the current segment is a year with a photo, grab it to show at the side.
+  const year = getYear(sentences[index])
+  const yearImg = year ? yearImages[year] : undefined
+
   // Each time a new sentence appears, fade it in and start a timer for the hint.
   useEffect(() => {
     setVisible(true)
@@ -86,6 +111,8 @@ function EnvelopePage() {
       className={`letter fade-in${leaving ? ' page-leaving' : ''}`}
       onClick={!isLast ? goToNext : undefined}
     >
+      <BackgroundMusic />
+
       <button
         type="button"
         className="btn letter__back"
@@ -94,13 +121,25 @@ function EnvelopePage() {
           goHome()
         }}
       >
-        ← Back
+        Back
       </button>
 
       <div className="letter__stage">
-        <p className={`letter__sentence${visible ? ' is-visible' : ''}`}>
-          {sentences[index]}
-        </p>
+        <div className="letter__row">
+          {yearImg && (
+            <img
+              key={year}
+              src={yearImg}
+              alt={year ?? ''}
+              className={`letter__year-img letter__year-img--${year}${
+                visible ? ' is-visible' : ''
+              }`}
+            />
+          )}
+          <p className={`letter__sentence${visible ? ' is-visible' : ''}`}>
+            {sentences[index]}
+          </p>
+        </div>
 
         {isLast ? (
           <button

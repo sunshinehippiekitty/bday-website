@@ -174,7 +174,7 @@ body {
 
 .gifts__buttons {
   display: flex;
-  gap: 40px;
+  gap: 80px;
   justify-content: center;
   align-items: center;
   flex-wrap: wrap;
@@ -348,4 +348,88 @@ body {
 
 .letter__finish.is-visible {
   opacity: 1;
+}
+
+/* Row that holds a year's photo (left) next to its text (right). */
+.letter__row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 40px;
+  flex-wrap: wrap;
+}
+
+.letter__year-img {
+  width: 300px;
+  object-fit: cover;
+  box-shadow: 0 8px 24px rgba(193, 61, 110, 0.2);
+  opacity: 0;
+  transform: translateX(-12px) scale(0.96);
+  transition:
+    opacity 0.5s ease,
+    transform 0.5s ease;
+}
+
+/* 2024 and 2025 photos are narrower. */
+.letter__year-img--2024,
+.letter__year-img--2025 {
+  width: 240px;
+}
+
+.letter__year-img.is-visible {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+}
+
+@media (max-width: 768px) {
+  /* Stack the photo on top of the year text on phones. */
+  .letter__row {
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .letter__year-img {
+    width: min(80vw, 340px);
+  }
+
+  .letter__year-img--2024,
+  .letter__year-img--2025 {
+    width: min(65vw, 280px);
+  }
+}
+
+/* ---------- Background music toggle ---------- */
+.music-toggle {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 50;
+  font-size: 20px;
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  cursor: pointer;
+  background: var(--pink-fill);
+  color: var(--pink-text);
+  border: 2px solid var(--pink-outline);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 0.2s ease,
+    transform 0.1s ease;
+}
+
+.music-toggle:hover {
+  background: var(--pink-fill-hover);
+}
+
+.music-toggle:active {
+  transform: scale(0.94);
+}
+
+.music-toggle__icon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
 }
