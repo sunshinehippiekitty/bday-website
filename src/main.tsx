@@ -10,7 +10,7 @@ import PresentPage from './pages/PresentPage.tsx'
 
 createRoot(document.getElementById('app')!).render(
   <StrictMode>
-    <BrowserRouter>
+    <BrowserRouter basename="/bday-website">
       <Routes>
         <Route path="/" element={<App />} />
         <Route path="/gifts" element={<GiftsPage />} />
