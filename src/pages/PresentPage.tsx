@@ -20,6 +20,8 @@ function PresentPage() {
 
   // Pinch-to-zoom tracking
   const pinchRef = useRef<{ startDistance: number; startZoom: number } | null>(null);
+  const pinchAnchorRef = useRef<{ logicalX: number; logicalY: number; clientX: number; clientY: number } | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -41,10 +43,10 @@ function PresentPage() {
     contextRef.current = context;
   }, []);
 
-  // Resize the on-screen canvas display when zoom changes.
-  // The backing pixel buffer stays fixed, so drawing quality doesn't change —
-  // only how big the canvas appears. Pointer coords are divided by `zoom`
-  // wherever they're read, so drawing still lines up under the cursor/finger.
+  // Resize the on-screen canvas display when zoom changes, and if this zoom
+  // change came from a pinch gesture, adjust scroll so the point under the
+  // fingers (pinchAnchorRef) stays under the fingers instead of the view
+  // just growing/shrinking from the top-left corner.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -52,6 +54,14 @@ function PresentPage() {
     if (!width || !height) return;
     canvas.style.width = `${width * zoom}px`;
     canvas.style.height = `${height * zoom}px`;
+
+    const container = scrollContainerRef.current;
+    const anchor = pinchAnchorRef.current;
+    if (container && anchor) {
+      const rect = container.getBoundingClientRect();
+      container.scrollLeft = anchor.logicalX * zoom - (anchor.clientX - rect.left);
+      container.scrollTop = anchor.logicalY * zoom - (anchor.clientY - rect.top);
+    }
   }, [zoom]);
 
   // Keep the pen color in sync with whatever's picked
@@ -110,9 +120,29 @@ function PresentPage() {
     context.clearRect(0, 0, canvas.width, canvas.height);
   };
 
-  const zoomIn = () => setZoom((z) => Math.min(MAX_ZOOM, +(z + 0.25).toFixed(2)));
-  const zoomOut = () => setZoom((z) => Math.max(MIN_ZOOM, +(z - 0.25).toFixed(2)));
-  const resetZoom = () => setZoom(1);
+  const anchorZoomAtCenter = () => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const centerClientX = rect.left + rect.width / 2;
+    const centerClientY = rect.top + rect.height / 2;
+    const logicalX = (container.scrollLeft + (centerClientX - rect.left)) / zoom;
+    const logicalY = (container.scrollTop + (centerClientY - rect.top)) / zoom;
+    pinchAnchorRef.current = { logicalX, logicalY, clientX: centerClientX, clientY: centerClientY };
+  };
+
+  const zoomIn = () => {
+    anchorZoomAtCenter();
+    setZoom((z) => Math.min(MAX_ZOOM, +(z + 0.25).toFixed(2)));
+  };
+  const zoomOut = () => {
+    anchorZoomAtCenter();
+    setZoom((z) => Math.max(MIN_ZOOM, +(z - 0.25).toFixed(2)));
+  };
+  const resetZoom = () => {
+    anchorZoomAtCenter();
+    setZoom(1);
+  };
 
   // ---- Mouse handlers ----
   const startDrawing = ({ nativeEvent }: React.MouseEvent<HTMLCanvasElement>) => {
@@ -164,8 +194,23 @@ function PresentPage() {
     if (e.touches.length === 2 && pinchRef.current) {
       const dist = getTouchDistance(e.touches[0], e.touches[1]);
       const scaleFactor = dist / pinchRef.current.startDistance;
-      const nextZoom = pinchRef.current.startZoom * scaleFactor;
-      setZoom(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, +nextZoom.toFixed(2))));
+      const nextZoom = Math.min(
+        MAX_ZOOM,
+        Math.max(MIN_ZOOM, +(pinchRef.current.startZoom * scaleFactor).toFixed(2))
+      );
+
+      const container = scrollContainerRef.current;
+      if (container) {
+        const rect = container.getBoundingClientRect();
+        const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        // Anchor point in "logical" drawing-space coordinates (invariant to zoom)
+        const logicalX = (container.scrollLeft + (midX - rect.left)) / zoom;
+        const logicalY = (container.scrollTop + (midY - rect.top)) / zoom;
+        pinchAnchorRef.current = { logicalX, logicalY, clientX: midX, clientY: midY };
+      }
+
+      setZoom(nextZoom);
       return;
     }
     const { x, y } = getTouchPos(e);
@@ -274,7 +319,7 @@ function PresentPage() {
 
   return (
     <main className="gifts fade-in">
-      <div style={{ position: "absolute", inset: 0, overflow: "auto" }}>
+      <div ref={scrollContainerRef} style={{ position: "absolute", inset: 0, overflow: "auto" }}>
         <canvas
           ref={canvasRef}
           onMouseDown={startDrawing}
