@@ -1,28 +1,53 @@
 import { useRef, useEffect, useState } from "react";
 import "../style.css";
 
+//add in the button styling
+//add in the photo
+
+
 function PresentPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const contextRef = useRef<CanvasRenderingContext2D | null>(null);
-  const [isDrawing, setIsDrawing] = useState(false);
+  const isDrawingRef = useRef(false);
 
   const pickerCanvasRef = useRef<HTMLCanvasElement>(null);
   const isPickingRef = useRef(false);
   const [selectedColor, setSelectedColor] = useState("black");
 
   const [isErasing, setIsErasing] = useState(false);
+  const isErasingRef = useRef(false);
   const ERASER_SIZE = 20;
 
   const [zoom, setZoom] = useState(1);
+  const zoomRef = useRef(1);
   const MIN_ZOOM = 0.5;
   const MAX_ZOOM = 3;
   const logicalSizeRef = useRef({ width: 0, height: 0 }); // fixed drawing-space size, set once
 
   // Pinch-to-zoom tracking
-  const pinchRef = useRef<{ startDistance: number; startZoom: number } | null>(null);
-  const pinchAnchorRef = useRef<{ logicalX: number; logicalY: number; clientX: number; clientY: number } | null>(null);
+  const pinchRef = useRef<{
+    startDistance: number;
+    startZoom: number;
+    logicalX: number; // point of the drawing under the fingers when the pinch began
+    logicalY: number;
+  } | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
+  // Manual pan offset (canvas's left/top within the container), since native
+  // scroll can't go negative and pins shrunk content to the top-left corner —
+  // that broke centering whenever zoom < 1.
+  const panRef = useRef({ x: 0, y: 0 });
+
+  // Mouse "pinch": holding both left + right buttons down and dragging
+  // vertically zooms in/out, mimicking a two-finger pinch with one cursor.
+  const mousePinchRef = useRef<{ startClientY: number; startZoom: number } | null>(null);
+
+  // Keep refs in sync with state so native (non-React) listeners always see current values
+  useEffect(() => {
+    isErasingRef.current = isErasing;
+  }, [isErasing]);
+
+  // Initial canvas setup
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -31,8 +56,12 @@ function PresentPage() {
 
     canvas.width = window.innerWidth * 2;
     canvas.height = window.innerHeight * 2;
+    canvas.style.position = "absolute";
+    canvas.style.left = "0px";
+    canvas.style.top = "0px";
     canvas.style.width = `${window.innerWidth}px`;
-    canvas.style.height = `${window.innerHeight}px`; // fixed: was innerWidth
+    canvas.style.height = `${window.innerHeight}px`;
+    panRef.current = { x: 0, y: 0 };
 
     const context = canvas.getContext("2d");
     if (!context) return;
@@ -42,27 +71,6 @@ function PresentPage() {
     context.lineWidth = 5;
     contextRef.current = context;
   }, []);
-
-  // Resize the on-screen canvas display when zoom changes, and if this zoom
-  // change came from a pinch gesture, adjust scroll so the point under the
-  // fingers (pinchAnchorRef) stays under the fingers instead of the view
-  // just growing/shrinking from the top-left corner.
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const { width, height } = logicalSizeRef.current;
-    if (!width || !height) return;
-    canvas.style.width = `${width * zoom}px`;
-    canvas.style.height = `${height * zoom}px`;
-
-    const container = scrollContainerRef.current;
-    const anchor = pinchAnchorRef.current;
-    if (container && anchor) {
-      const rect = container.getBoundingClientRect();
-      container.scrollLeft = anchor.logicalX * zoom - (anchor.clientX - rect.left);
-      container.scrollTop = anchor.logicalY * zoom - (anchor.clientY - rect.top);
-    }
-  }, [zoom]);
 
   // Keep the pen color in sync with whatever's picked
   useEffect(() => {
@@ -75,7 +83,7 @@ function PresentPage() {
   const beginStroke = (x: number, y: number) => {
     if (!contextRef.current) return;
     const context = contextRef.current;
-    if (isErasing) {
+    if (isErasingRef.current) {
       context.save();
       context.globalCompositeOperation = "destination-out";
       context.beginPath();
@@ -86,13 +94,13 @@ function PresentPage() {
       context.beginPath();
       context.moveTo(x, y);
     }
-    setIsDrawing(true);
+    isDrawingRef.current = true;
   };
 
   const continueStroke = (x: number, y: number) => {
-    if (!isDrawing || !contextRef.current) return;
+    if (!isDrawingRef.current || !contextRef.current) return;
     const context = contextRef.current;
-    if (isErasing) {
+    if (isErasingRef.current) {
       context.save();
       context.globalCompositeOperation = "destination-out";
       context.beginPath();
@@ -106,7 +114,7 @@ function PresentPage() {
   };
 
   const endStroke = () => {
-    setIsDrawing(false);
+    isDrawingRef.current = false;
   };
 
   const toggleEraser = () => {
@@ -120,110 +128,200 @@ function PresentPage() {
     context.clearRect(0, 0, canvas.width, canvas.height);
   };
 
-  const anchorZoomAtCenter = () => {
+  // ---- Zoom helpers ----
+  // Zoom/pan are applied straight to the canvas (synchronously) and kept in refs,
+  // so rapid pinch events never read stale values. React state is only used
+  // for the "100%" label.
+  const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
+
+  const applyView = (nextZoom: number, panX: number, panY: number) => {
+    const canvas = canvasRef.current;
+    const { width, height } = logicalSizeRef.current;
+    if (!canvas || !width || !height) return;
+    zoomRef.current = nextZoom;
+    panRef.current = { x: panX, y: panY };
+    canvas.style.width = `${width * nextZoom}px`;
+    canvas.style.height = `${height * nextZoom}px`;
+    canvas.style.left = `${panX}px`;
+    canvas.style.top = `${panY}px`;
+    setZoom(nextZoom);
+  };
+
+  // Zoom to `nextZoom` while keeping whatever is under (clientX, clientY) fixed on screen
+  const zoomAt = (clientX: number, clientY: number, nextZoom: number) => {
     const container = scrollContainerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
-    const centerClientX = rect.left + rect.width / 2;
-    const centerClientY = rect.top + rect.height / 2;
-    const logicalX = (container.scrollLeft + (centerClientX - rect.left)) / zoom;
-    const logicalY = (container.scrollTop + (centerClientY - rect.top)) / zoom;
-    pinchAnchorRef.current = { logicalX, logicalY, clientX: centerClientX, clientY: centerClientY };
+    const z = clampZoom(nextZoom);
+    const logicalX = (clientX - rect.left - panRef.current.x) / zoomRef.current;
+    const logicalY = (clientY - rect.top - panRef.current.y) / zoomRef.current;
+    applyView(z, clientX - rect.left - logicalX * z, clientY - rect.top - logicalY * z);
   };
 
-  const zoomIn = () => {
-    anchorZoomAtCenter();
-    setZoom((z) => Math.min(MAX_ZOOM, +(z + 0.25).toFixed(2)));
+  const zoomAtCenter = (nextZoom: number) => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, nextZoom);
   };
-  const zoomOut = () => {
-    anchorZoomAtCenter();
-    setZoom((z) => Math.max(MIN_ZOOM, +(z - 0.25).toFixed(2)));
-  };
-  const resetZoom = () => {
-    anchorZoomAtCenter();
-    setZoom(1);
-  };
+
+  const zoomIn = () => zoomAtCenter(zoomRef.current + 0.25);
+  const zoomOut = () => zoomAtCenter(zoomRef.current - 0.25);
+  const resetZoom = () => zoomAtCenter(1);
 
   // ---- Mouse handlers ----
   const startDrawing = ({ nativeEvent }: React.MouseEvent<HTMLCanvasElement>) => {
-    beginStroke(nativeEvent.offsetX / zoom, nativeEvent.offsetY / zoom);
+    // buttons: 1 = left, 2 = right, 3 = both held together
+    if (nativeEvent.buttons === 3) {
+      mousePinchRef.current = { startClientY: nativeEvent.clientY, startZoom: zoomRef.current };
+      return;
+    }
+    if (nativeEvent.button !== 0) return; // only left-click draws normally
+    beginStroke(nativeEvent.offsetX / zoomRef.current, nativeEvent.offsetY / zoomRef.current);
   };
 
   const finishDrawing = () => {
+    mousePinchRef.current = null;
     endStroke();
   };
 
   const draw = ({ nativeEvent }: React.MouseEvent<HTMLCanvasElement>) => {
-    continueStroke(nativeEvent.offsetX / zoom, nativeEvent.offsetY / zoom);
-  };
-
-  // ---- Touch handlers ----
-  const getTouchDistance = (a: React.Touch, b: React.Touch) => {
-    const dx = a.clientX - b.clientX;
-    const dy = a.clientY - b.clientY;
-    return Math.hypot(dx, dy);
-  };
-
-  const getTouchPos = (e: React.TouchEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    const touch = e.touches[0] ?? e.changedTouches[0];
-    return {
-      x: (touch.clientX - rect.left) / zoom,
-      y: (touch.clientY - rect.top) / zoom,
-    };
-  };
-
-  const startTouchDrawing = (e: React.TouchEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    if (e.touches.length === 2) {
-      // Two fingers down: begin a pinch-zoom gesture instead of drawing.
-      // If a stroke was already in progress from a single finger, stop it.
-      if (isDrawing) endStroke();
-      const dist = getTouchDistance(e.touches[0], e.touches[1]);
-      pinchRef.current = { startDistance: dist, startZoom: zoom };
-      return;
-    }
-    const { x, y } = getTouchPos(e);
-    beginStroke(x, y);
-  };
-
-  const touchDraw = (e: React.TouchEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    if (e.touches.length === 2 && pinchRef.current) {
-      const dist = getTouchDistance(e.touches[0], e.touches[1]);
-      const scaleFactor = dist / pinchRef.current.startDistance;
-      const nextZoom = Math.min(
-        MAX_ZOOM,
-        Math.max(MIN_ZOOM, +(pinchRef.current.startZoom * scaleFactor).toFixed(2))
-      );
-
-      const container = scrollContainerRef.current;
-      if (container) {
-        const rect = container.getBoundingClientRect();
-        const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-        const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-        // Anchor point in "logical" drawing-space coordinates (invariant to zoom)
-        const logicalX = (container.scrollLeft + (midX - rect.left)) / zoom;
-        const logicalY = (container.scrollTop + (midY - rect.top)) / zoom;
-        pinchAnchorRef.current = { logicalX, logicalY, clientX: midX, clientY: midY };
+    if (mousePinchRef.current) {
+      if (nativeEvent.buttons !== 3) {
+        // one of the buttons was released outside a mouseup event
+        mousePinchRef.current = null;
+        return;
       }
-
-      setZoom(nextZoom);
+      const delta = mousePinchRef.current.startClientY - nativeEvent.clientY; // drag up = zoom in
+      zoomAt(
+        nativeEvent.clientX,
+        nativeEvent.clientY,
+        mousePinchRef.current.startZoom * Math.exp(delta / 200)
+      );
       return;
     }
-    const { x, y } = getTouchPos(e);
-    continueStroke(x, y);
+    if (nativeEvent.buttons !== 1) return; // only left-button drag draws
+    continueStroke(nativeEvent.offsetX / zoomRef.current, nativeEvent.offsetY / zoomRef.current);
   };
 
-  const finishTouchDrawing = (e: React.TouchEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    if (e.touches.length < 2) {
-      pinchRef.current = null;
-    }
-    endStroke();
-  };
+  // ---- Touch + wheel handlers: attached natively with { passive: false } so
+  // preventDefault() reliably blocks the browser's own pinch-zoom/scroll.
+  // They live on the container (not the canvas) so a pinch still works when
+  // the canvas is zoomed out and smaller than the screen. ----
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const container = scrollContainerRef.current;
+    if (!canvas || !container) return;
+
+    const getTouchDistance = (a: Touch, b: Touch) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+
+    const getTouchPos = (touch: Touch) => {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (touch.clientX - rect.left) / zoomRef.current,
+        y: (touch.clientY - rect.top) / zoomRef.current,
+      };
+    };
+
+    const handleTouchStart = (e: TouchEvent) => {
+      e.preventDefault();
+      if (e.touches.length === 2) {
+        if (isDrawingRef.current) endStroke();
+        const a = e.touches[0];
+        const b = e.touches[1];
+        const rect = container.getBoundingClientRect();
+        const midX = (a.clientX + b.clientX) / 2;
+        const midY = (a.clientY + b.clientY) / 2;
+        // Remember which point of the drawing is under the fingers right now.
+        // Every move keeps THAT point under the fingers -> no jumping to a corner.
+        pinchRef.current = {
+          startDistance: getTouchDistance(a, b) || 1,
+          startZoom: zoomRef.current,
+          logicalX: (midX - rect.left - panRef.current.x) / zoomRef.current,
+          logicalY: (midY - rect.top - panRef.current.y) / zoomRef.current,
+        };
+        return;
+      }
+      if (e.touches.length === 1 && !pinchRef.current) {
+        const { x, y } = getTouchPos(e.touches[0]);
+        beginStroke(x, y);
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      e.preventDefault();
+      if (e.touches.length === 2 && pinchRef.current) {
+        const p = pinchRef.current;
+        const a = e.touches[0];
+        const b = e.touches[1];
+        const nextZoom = clampZoom((p.startZoom * getTouchDistance(a, b)) / p.startDistance);
+        const rect = container.getBoundingClientRect();
+        const midX = (a.clientX + b.clientX) / 2;
+        const midY = (a.clientY + b.clientY) / 2;
+        // Also lets you pan with two fingers while pinching
+        applyView(nextZoom, midX - rect.left - p.logicalX * nextZoom, midY - rect.top - p.logicalY * nextZoom);
+        return;
+      }
+      const touch = e.touches[0];
+      if (!touch) return;
+      const { x, y } = getTouchPos(touch);
+      continueStroke(x, y);
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      e.preventDefault();
+      if (e.touches.length < 2) {
+        pinchRef.current = null;
+      }
+      endStroke();
+    };
+
+    // Wheel / trackpad:
+    //  - two-finger slide on a trackpad (plain wheel event) = move the page
+    //  - trackpad pinch (arrives as a wheel event with ctrlKey) = zoom
+    //  - Ctrl (or Cmd) + mouse wheel = zoom, centered on the cursor
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) {
+        // clamp so one mouse-wheel notch (~100) zooms a sensible amount,
+        // while small trackpad-pinch deltas pass through unchanged
+        const d = Math.max(-25, Math.min(25, e.deltaY));
+        zoomAt(e.clientX, e.clientY, zoomRef.current * Math.exp(-d * 0.01));
+        return;
+      }
+      // deltaMode 1 = lines (some mice), 0 = pixels (trackpads)
+      const unit = e.deltaMode === 1 ? 16 : 1;
+      applyView(
+        zoomRef.current,
+        panRef.current.x - e.deltaX * unit,
+        panRef.current.y - e.deltaY * unit
+      );
+    };
+
+    container.addEventListener("touchstart", handleTouchStart, { passive: false });
+    container.addEventListener("touchmove", handleTouchMove, { passive: false });
+    container.addEventListener("touchend", handleTouchEnd, { passive: false });
+    container.addEventListener("touchcancel", handleTouchEnd, { passive: false });
+    container.addEventListener("wheel", handleWheel, { passive: false });
+
+    // iOS Safari fires its own proprietary pinch gesture events and zooms the
+    // whole page through them regardless of touchmove's preventDefault().
+    const preventGestureDefault = (e: Event) => e.preventDefault();
+    container.addEventListener("gesturestart", preventGestureDefault, { passive: false });
+    container.addEventListener("gesturechange", preventGestureDefault, { passive: false });
+    container.addEventListener("gestureend", preventGestureDefault, { passive: false });
+
+    return () => {
+      container.removeEventListener("touchstart", handleTouchStart);
+      container.removeEventListener("touchmove", handleTouchMove);
+      container.removeEventListener("touchend", handleTouchEnd);
+      container.removeEventListener("touchcancel", handleTouchEnd);
+      container.removeEventListener("wheel", handleWheel);
+      container.removeEventListener("gesturestart", preventGestureDefault);
+      container.removeEventListener("gesturechange", preventGestureDefault);
+      container.removeEventListener("gestureend", preventGestureDefault);
+    };
+  }, []);
 
   // ---- Color picker canvas ----
   useEffect(() => {
@@ -264,7 +362,6 @@ function PresentPage() {
       return { x: clientX - rect.left, y: clientY - rect.top };
     };
 
-    // Mouse support for the picker
     const handleMouseDown = (e: MouseEvent) => {
       isPickingRef.current = true;
       const { x, y } = getCanvasCoords(e.clientX, e.clientY);
@@ -279,7 +376,6 @@ function PresentPage() {
       isPickingRef.current = false;
     };
 
-    // Touch support for the picker
     const handleTouchStart = (e: TouchEvent) => {
       e.preventDefault();
       isPickingRef.current = true;
@@ -318,16 +414,17 @@ function PresentPage() {
   }, []);
 
   return (
-    <main className="gifts fade-in">
-      <div ref={scrollContainerRef} style={{ position: "absolute", inset: 0, overflow: "auto" }}>
+    <main className="gifts fade-in" style={{ touchAction: "none" }}>
+      <div
+        ref={scrollContainerRef}
+        style={{ position: "absolute", inset: 0, overflow: "hidden", touchAction: "none" }}
+      >
         <canvas
           ref={canvasRef}
           onMouseDown={startDrawing}
           onMouseUp={finishDrawing}
           onMouseMove={draw}
-          onTouchStart={startTouchDrawing}
-          onTouchMove={touchDraw}
-          onTouchEnd={finishTouchDrawing}
+          onContextMenu={(e) => e.preventDefault()}
           style={{ touchAction: "none", display: "block" }}
         />
       </div>
