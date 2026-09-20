@@ -1,11 +1,38 @@
 import { useRef, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import BackgroundMusic from "../components/BackgroundMusic.tsx";
 import "../style.css";
 
-//add in the button styling
 //add in the photo
 
+const FOLK_TRACK =
+  import.meta.env.BASE_URL + "folk_acoustic-rain-in-the-forest-130822.mp3";
+
+const sentences = [
+  'You have seen our memories,',
+  'and you have seen me through Kpop',
+  'and the times when i want to take photobooth pictures',
+  '(now i spend the money on other things haha).',
+  'So i wanted this activity to be a combination of both!',
+  'I drew a picture of us',
+  'and then you are gonna decorate it like decorating photos!',
+  'Have funn!!'
+]
 
 function PresentPage() {
+  const navigate = useNavigate();
+
+  // Intro sentences play first, then the drawing canvas is revealed.
+  const [phase, setPhase] = useState<"intro" | "draw">("intro");
+  const [index, setIndex] = useState(0);
+  const [visible, setVisible] = useState(true);
+  const [showHint, setShowHint] = useState(false);
+  const hintTimer = useRef<number | undefined>(undefined);
+  const isLastSentence = index === sentences.length - 1;
+
+  // Confirm popup shown when leaving the drawing screen.
+  const [showLeavePopup, setShowLeavePopup] = useState(false);
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const contextRef = useRef<CanvasRenderingContext2D | null>(null);
   const isDrawingRef = useRef(false);
@@ -52,8 +79,9 @@ function PresentPage() {
     isErasingRef.current = isErasing;
   }, [isErasing]);
  
-  // Initial canvas setup
+  // Initial canvas setup (runs once the drawing phase mounts the canvas)
   useEffect(() => {
+    if (phase !== "draw") return;
     const canvas = canvasRef.current;
     if (!canvas) return;
  
@@ -75,7 +103,7 @@ function PresentPage() {
     context.strokeStyle = selectedColor;
     context.lineWidth = 5;
     contextRef.current = context;
-  }, []);
+  }, [phase]);
  
   // Keep the pen color in sync with whatever's picked
   useEffect(() => {
@@ -220,6 +248,7 @@ function PresentPage() {
   // They live on the container (not the canvas) so a pinch still works when
   // the canvas is zoomed out and smaller than the screen. ----
   useEffect(() => {
+    if (phase !== "draw") return;
     const canvas = canvasRef.current;
     const container = scrollContainerRef.current;
     if (!canvas || !container) return;
@@ -341,10 +370,11 @@ function PresentPage() {
       container.removeEventListener("gesturechange", preventGestureDefault);
       container.removeEventListener("gestureend", preventGestureDefault);
     };
-  }, []);
+  }, [phase]);
  
   // ---- Color picker canvas ----
   useEffect(() => {
+    if (phase !== "draw") return;
     const canvas = pickerCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -431,10 +461,87 @@ function PresentPage() {
       canvas.removeEventListener("touchmove", handleTouchMove);
       canvas.removeEventListener("touchend", handleTouchEnd);
     };
+  }, [phase]);
+ 
+  // ---- Intro sentence reveal (envelope-style) ----
+  useEffect(() => {
+    if (phase !== "intro") return;
+    setVisible(true);
+    setShowHint(false);
+    if (hintTimer.current) window.clearTimeout(hintTimer.current);
+    hintTimer.current = window.setTimeout(() => setShowHint(true), 2000);
+    return () => {
+      if (hintTimer.current) window.clearTimeout(hintTimer.current);
+    };
+  }, [index, phase]);
+ 
+  // ---- Warn on refresh/close so the user knows the page will relock. ----
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, []);
+ 
+  const goToNextSentence = () => {
+    if (isLastSentence) return;
+    setVisible(false);
+    setShowHint(false);
+    window.setTimeout(() => setIndex((i) => i + 1), 500);
+  };
+ 
+  // ---- Intro phase: sentences one at a time before the drawing canvas ----
+  if (phase === "intro") {
+    return (
+      <main
+        className="letter fade-in"
+        onClick={!isLastSentence ? goToNextSentence : undefined}
+      >
+        <BackgroundMusic track={FOLK_TRACK} />
+ 
+        <button
+          type="button"
+          className="btn letter__back"
+          onClick={(e) => {
+            e.stopPropagation();
+            navigate("/gifts");
+          }}
+        >
+          Back
+        </button>
+ 
+        <div className="letter__stage">
+          <p className={`letter__sentence${visible ? " is-visible" : ""}`}>
+            {sentences[index]}
+          </p>
+ 
+          {isLastSentence ? (
+            <button
+              type="button"
+              className={`btn letter__finish${visible ? " is-visible" : ""}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setPhase("draw");
+              }}
+            >
+              Start decorating!
+            </button>
+          ) : (
+            <span className={`letter__hint${showHint ? " is-visible" : ""}`}>
+              Click anywhere to continue <br /> (Go slow, no back button to go back to previous sentence)
+            </span>
+          )}
+        </div>
+      </main>
+    );
+  }
  
   return (
     <main className="gifts fade-in" style={{ touchAction: "none" }}>
+      <BackgroundMusic track={FOLK_TRACK} toggleClassName="music-toggle--bottom-left" />
+ 
       <div
         ref={scrollContainerRef}
         style={{ position: "absolute", inset: 0, overflow: "hidden", touchAction: "none" }}
@@ -449,7 +556,7 @@ function PresentPage() {
         />
       </div>
  
-      <div className="gifts__content" style={{ position: "absolute", top: 16, right: 16 }}>
+      <div className="gifts__content present-tools" style={{ position: "absolute", top: 16, right: 16 }}>
         <canvas
           ref={pickerCanvasRef}
           className="color-palette"
@@ -473,19 +580,49 @@ function PresentPage() {
         </div>
  
         <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-          <button onClick={toggleEraser}>
+          <button onClick={toggleEraser} className="btn drawing-button">
             {isErasing ? "Switch to Drawing" : "Switch to Eraser"}
           </button>
-          <button onClick={resetCanvas}>Reset</button>
+          <button onClick={resetCanvas} className="btn drawing-button">Reset</button>
         </div>
  
         <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
-          <button onClick={zoomOut}>−</button>
+          <button onClick={zoomOut} className="btn drawing-button">−</button>
           <span>{Math.round(zoom * 100)}%</span>
-          <button onClick={zoomIn}>+</button>
-          <button onClick={resetZoom}>Reset Zoom</button>
+          <button onClick={zoomIn} className="btn drawing-button">+</button>
+          <button onClick={resetZoom} className="btn drawing-button">Reset Zoom</button>
         </div>
       </div>
+
+      <button
+        type="button"
+        className="btn letter__back"
+        onClick={() => setShowLeavePopup(true)}
+      >
+        Back
+      </button>
+
+      {showLeavePopup && (
+        <div className="modal-overlay" onClick={() => setShowLeavePopup(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <p className="modal-text">
+              Your drawing won't be autosaved. Are you sure you want to leave?
+            </p>
+            <div className="modal-buttons">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setShowLeavePopup(false)}
+              >
+                Cancel
+              </button>
+              <button type="button" className="btn" onClick={() => navigate("/gifts")}>
+                Leave
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

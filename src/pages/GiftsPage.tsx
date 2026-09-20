@@ -27,16 +27,28 @@ function popConfetti() {
   window.setTimeout(() => container.remove(), 4500)
 }
 
+const PRESENT_TO = '/gifts/present'
+
 const gifts = [
   { img: cameraImg, label: 'Camera', to: '/gifts/camera' },
   { img: envelopeImg, label: 'Envelope', to: '/gifts/envelope' },
-  { img: presentImg, label: 'Present', to: '/gifts/present' },
+  { img: presentImg, label: 'Present', to: PRESENT_TO },
 ]
 
 function GiftsPage() {
   const navigate = useNavigate()
   const [leaving, setLeaving] = useState(false)
   const [chosen, setChosen] = useState<string | null>(null)
+  const [presentUnlocked, setPresentUnlocked] = useState(false)
+  // Which popup (if any) is showing: locked hint or the entry warning.
+  const [popup, setPopup] = useState<'locked' | 'warning' | null>(null)
+
+  useEffect(() => {
+    // The Present unlocks only after both other gifts have been opened.
+    const cameraVisited = sessionStorage.getItem('visited:camera') === '1'
+    const envelopeVisited = sessionStorage.getItem('visited:envelope') === '1'
+    setPresentUnlocked(cameraVisited && envelopeVisited)
+  }, [])
 
   useEffect(() => {
     popConfetti()
@@ -65,6 +77,22 @@ function GiftsPage() {
     window.setTimeout(() => navigate(to), 1400)
   }
 
+  const handleGiftClick = (to: string) => {
+    if (leaving) return
+    if (to === PRESENT_TO) {
+      // Present is gated: locked -> hint popup, unlocked -> warning popup.
+      setPopup(presentUnlocked ? 'warning' : 'locked')
+      return
+    }
+    handleChoose(to)
+  }
+
+  // Confirmed entering the Present from the warning popup.
+  const confirmPresent = () => {
+    setPopup(null)
+    handleChoose(PRESENT_TO)
+  }
+
   return (
     <main className={`gifts fade-in${leaving ? ' page-leaving' : ''}`}>
       <div className="gifts__content">
@@ -86,19 +114,64 @@ function GiftsPage() {
         </div>
 
         <div className="gifts__buttons">
-          {gifts.map((gift) => (
-            <button
-              key={gift.to}
-              type="button"
-              aria-label={gift.label}
-              className={`gift-emoji${chosen === gift.to ? ' gift-emoji--chosen' : ''}`}
-              onClick={() => handleChoose(gift.to)}
-            >
-              <img src={gift.img} alt={gift.label} className="gift-img" />
-            </button>
-          ))}
+          {gifts.map((gift) => {
+            const locked = gift.to === PRESENT_TO && !presentUnlocked
+            return (
+              <button
+                key={gift.to}
+                type="button"
+                aria-label={gift.label}
+                className={`gift-emoji${
+                  chosen === gift.to ? ' gift-emoji--chosen' : ''
+                }${locked ? ' gift-emoji--locked' : ''}`}
+                onClick={() => handleGiftClick(gift.to)}
+              >
+                <img
+                  src={gift.img}
+                  alt={gift.label}
+                  className={`gift-img${locked ? ' gift-img--locked' : ''}`}
+                />
+              </button>
+            )
+          })}
         </div>
       </div>
+
+      {/* Locked Present hint */}
+      {popup === 'locked' && (
+        <div className="modal-overlay" onClick={() => setPopup(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <p className="modal-text">
+              Go through the other 2 gifts first before the final activity!
+            </p>
+            <div className="modal-buttons">
+              <button type="button" className="btn" onClick={() => setPopup(null)}>
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Unlocked Present entry warning */}
+      {popup === 'warning' && (
+        <div className="modal-overlay" onClick={() => setPopup(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <p className="modal-text">
+              Once you enter, leaving or refreshing this page will relock it and
+              you won't be able to come back to the other gifts. Ready?
+            </p>
+            <div className="modal-buttons">
+              <button type="button" className="btn" onClick={() => setPopup(null)}>
+                Cancel
+              </button>
+              <button type="button" className="btn" onClick={confirmPresent}>
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }

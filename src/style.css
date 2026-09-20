@@ -432,3 +432,91 @@ body {
   height: 24px;
   object-fit: contain;
 }
+
+/* Reposition the music toggle to the bottom-left (used on the drawing page). */
+.music-toggle--bottom-left {
+  top: auto;
+  right: auto;
+  bottom: 20px;
+  left: 20px;
+}
+
+.drawing-button {
+  position: sticky;
+  font-size: 17px;
+  padding: 8px 15px;
+}
+
+/* Shrink the whole drawing tool panel on phones so it doesn't cover the canvas. */
+@media (max-width: 768px) {
+  .present-tools {
+    top: 8px !important;
+    right: 8px !important;
+    max-width: 65vw;
+    font-size: 15px;
+    gap: 5px;
+  }
+
+  .present-tools .color-palette {
+    width: 100%;
+    height: auto;
+  }
+
+  .present-tools .drawing-button {
+    font-size: 15px;
+    padding: 7px 10px;
+  }
+
+  .present-tools > div {
+    margin-top: 5px !important;
+    gap: 5px !important;
+    flex-wrap: wrap;
+  }
+}
+
+/* ---------- Locked gift (Present before the others are opened) ---------- */
+.gift-img--locked {
+  filter: grayscale(100%);
+  opacity: 0.7;
+}
+
+.gift-emoji--locked {
+  cursor: not-allowed;
+}
+
+/* ---------- Popup modals ---------- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.modal-card {
+  background: #fff;
+  border-radius: 20px;
+  padding: 32px 28px;
+  max-width: 360px;
+  width: 100%;
+  text-align: center;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+
+.modal-text {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.5;
+  color: #333;
+  margin: 0 0 24px;
+}
+
+.modal-buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+}

@@ -80,6 +80,11 @@ function EnvelopePage() {
   const year = getYear(sentences[index])
   const yearImg = year ? yearImages[year] : undefined
 
+  // Mark this gift as opened so the Present unlocks once both are visited.
+  useEffect(() => {
+    sessionStorage.setItem('visited:envelope', '1')
+  }, [])
+
   // Each time a new sentence appears, fade it in and start a timer for the hint.
   useEffect(() => {
     setVisible(true)
@@ -155,6 +160,7 @@ function EnvelopePage() {
         ) : (
           <span className={`letter__hint${showHint ? ' is-visible' : ''}`}>
             Click anywhere to continue
+            <br /> (Go slow, no back button to go back to previous sentence)
           </span>
         )}
       </div>
