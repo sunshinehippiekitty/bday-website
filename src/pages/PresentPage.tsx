@@ -1,12 +1,36 @@
 import { useRef, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import BackgroundMusic from "../components/BackgroundMusic.tsx";
+// TEMP placeholder for the final gifts photo. Replace this import with your own
+// image once you add it, e.g. `import giftsImg from "../assets/gifts.jpeg";`
+import giftsImg from "../assets/present.jpeg";
 import "../style.css";
-
-//add in the photo
 
 const FOLK_TRACK =
   import.meta.env.BASE_URL + "folk_acoustic-rain-in-the-forest-130822.mp3";
+
+// Fires a burst of confetti pieces from the top of the screen.
+function popConfetti() {
+  const colors = ["#ff8fb1", "#ffd6e5", "#c13d6e", "#b9e1ff", "#c5fff6", "#de89fa"];
+  const count = 80;
+  const container = document.createElement("div");
+  container.className = "confetti-container";
+  document.body.appendChild(container);
+
+  for (let i = 0; i < count; i++) {
+    const piece = document.createElement("span");
+    piece.className = "confetti-piece";
+    piece.style.left = `${Math.random() * 100}vw`;
+    piece.style.background = colors[Math.floor(Math.random() * colors.length)];
+    piece.style.animationDelay = `${Math.random() * 0.5}s`;
+    piece.style.animationDuration = `${2 + Math.random() * 1.5}s`;
+    piece.style.transform = `rotate(${Math.random() * 360}deg)`;
+    container.appendChild(piece);
+  }
+
+  // Clean up after the animation finishes.
+  window.setTimeout(() => container.remove(), 4500);
+}
 
 const sentences = [
   'You have seen our memories,',
@@ -22,8 +46,30 @@ const sentences = [
 function PresentPage() {
   const navigate = useNavigate();
 
-  // Intro sentences play first, then the drawing canvas is revealed.
-  const [phase, setPhase] = useState<"intro" | "draw">("intro");
+  // Once a drawing is saved we persist it (and the screen we're on) so that a
+  // reload on the redeem/final pages restores everything instead of resetting.
+  const storedDrawing =
+    typeof sessionStorage !== "undefined"
+      ? sessionStorage.getItem("present:drawing")
+      : null;
+  const storedPhase =
+    typeof sessionStorage !== "undefined"
+      ? sessionStorage.getItem("present:phase")
+      : null;
+
+  // Intro sentences play first, then the drawing canvas is revealed, then the
+  // "redeem" preview screen, then the final gifts screen.
+  const [phase, setPhase] = useState<"intro" | "draw" | "redeem" | "final">(
+    storedDrawing && (storedPhase === "redeem" || storedPhase === "final")
+      ? (storedPhase as "redeem" | "final")
+      : "intro"
+  );
+
+  // True once the user has actually drawn a stroke, so the Save button shows.
+  const [hasDrawn, setHasDrawn] = useState(false);
+
+  // Snapshot of the drawing (data URL) shown on the redeem screen.
+  const [savedDrawing, setSavedDrawing] = useState<string | null>(storedDrawing);
   const [index, setIndex] = useState(0);
   const [visible, setVisible] = useState(true);
   const [showHint, setShowHint] = useState(false);
@@ -103,6 +149,18 @@ function PresentPage() {
     context.strokeStyle = selectedColor;
     context.lineWidth = 5;
     contextRef.current = context;
+
+    // If we're returning from the redeem screen, repaint the saved drawing so
+    // "Go back" keeps what was drawn. The snapshot is full-resolution, and the
+    // context is scaled 2x, so draw it at the logical (CSS) size.
+    if (savedDrawing) {
+      const img = new Image();
+      img.onload = () => {
+        context.drawImage(img, 0, 0, logicalSizeRef.current.width, logicalSizeRef.current.height);
+      };
+      img.src = savedDrawing;
+      setHasDrawn(true);
+    }
   }, [phase]);
  
   // Keep the pen color in sync with whatever's picked
@@ -126,6 +184,8 @@ function PresentPage() {
     } else {
       context.beginPath();
       context.moveTo(x, y);
+      // A pen stroke started -> there's now something on the canvas, reveal Save.
+      setHasDrawn(true);
     }
     isDrawingRef.current = true;
   };
@@ -159,6 +219,55 @@ function PresentPage() {
     const context = contextRef.current;
     if (!canvas || !context) return;
     context.clearRect(0, 0, canvas.width, canvas.height);
+    setHasDrawn(false);
+  };
+
+  // Reset the whole experience: clear the saved drawing and the visited flags so
+  // the Present relocks (gifts must be reopened), then go back to the home page.
+  const resetEverything = () => {
+    sessionStorage.removeItem("present:drawing");
+    sessionStorage.removeItem("present:phase");
+    sessionStorage.removeItem("visited:camera");
+    sessionStorage.removeItem("visited:envelope");
+    navigate("/");
+  };
+
+  // Snapshot the current canvas and move to the redeem preview screen. The
+  // snapshot is persisted so reloading the redeem/final pages keeps the drawing.
+  const handleSave = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dataUrl = canvas.toDataURL("image/png");
+    setSavedDrawing(dataUrl);
+    sessionStorage.setItem("present:drawing", dataUrl);
+    sessionStorage.setItem("present:phase", "redeem");
+    setPhase("redeem");
+  };
+
+  // Download the saved drawing as a PNG (on a white background, since the
+  // canvas itself is transparent), then move on to the final gifts screen.
+  const downloadDrawing = () => {
+    if (!savedDrawing) return;
+    const img = new Image();
+    img.onload = () => {
+      const out = document.createElement("canvas");
+      out.width = img.width;
+      out.height = img.height;
+      const ctx = out.getContext("2d");
+      if (ctx) {
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, out.width, out.height);
+        ctx.drawImage(img, 0, 0);
+      }
+      const link = document.createElement("a");
+      link.href = out.toDataURL("image/png");
+      link.download = "our-drawing.png";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setPhase("final");
+    };
+    img.src = savedDrawing;
   };
  
   // ---- Zoom helpers ----
@@ -475,16 +584,34 @@ function PresentPage() {
     };
   }, [index, phase]);
  
-  // ---- Warn on refresh/close so the user knows the page will relock. ----
+  // ---- Warn on refresh/close only while drawing (before the drawing is saved),
+  // since that work isn't persisted. Once saved, reloading is fine. ----
   useEffect(() => {
+    if (phase !== "draw") return;
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault();
-      e.returnValue = "";
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, []);
+  }, [phase]);
  
+  // Pop confetti when the final gifts screen appears.
+  useEffect(() => {
+    if (phase === "final") popConfetti();
+  }, [phase]);
+
+  // Keep the persisted phase in sync once a drawing exists, so a reload on the
+  // redeem/final screens comes back to the same screen. While re-editing on the
+  // draw screen we clear it, so a reload there falls back to the intro instead
+  // of skipping ahead to a stale redeem screen.
+  useEffect(() => {
+    if (phase === "redeem" || phase === "final") {
+      sessionStorage.setItem("present:phase", phase);
+    } else if (phase === "draw") {
+      sessionStorage.removeItem("present:phase");
+    }
+  }, [phase]);
+
   const goToNextSentence = () => {
     if (isLastSentence) return;
     setVisible(false);
@@ -538,6 +665,65 @@ function PresentPage() {
     );
   }
  
+  // ---- Redeem phase: show the saved drawing with go-back / download ----
+  if (phase === "redeem") {
+    return (
+      <main className="gifts fade-in">
+        <BackgroundMusic track={FOLK_TRACK} />
+
+        <div className="gifts__content present-screen">
+          <h1 className="present-title">
+            Yay! Now send it to me to redeem your present!
+          </h1>
+
+          {savedDrawing && (
+            <img
+              src={savedDrawing}
+              alt="Your drawing"
+              className="present-preview"
+            />
+          )}
+
+          <div className="present-actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setPhase("draw")}
+            >
+              Go back
+            </button>
+            <button type="button" className="btn" onClick={downloadDrawing}>
+              Download drawing
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  // ---- Final phase: gifts reveal with confetti ----
+  if (phase === "final") {
+    return (
+      <main className="gifts fade-in">
+        <BackgroundMusic track={FOLK_TRACK} />
+
+        <div className="gifts__content present-screen">
+          <h1 className="present-title">
+            Here are ure gifts! I will pass it to u in school or if we meet up again (Dont forget my shirt)! Happy bday!
+          </h1>
+
+          <img src={giftsImg} alt="Your gifts" className="present-gifts-img" />
+
+          <div className="present-actions">
+            <button type="button" className="btn" onClick={resetEverything}>
+              Reset
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="gifts fade-in" style={{ touchAction: "none" }}>
       <BackgroundMusic track={FOLK_TRACK} toggleClassName="music-toggle--bottom-left" />
@@ -601,6 +787,16 @@ function PresentPage() {
       >
         Back
       </button>
+
+      {hasDrawn && (
+        <button
+          type="button"
+          className="btn present-save"
+          onClick={handleSave}
+        >
+          Save
+        </button>
+      )}
 
       {showLeavePopup && (
         <div className="modal-overlay" onClick={() => setShowLeavePopup(false)}>
