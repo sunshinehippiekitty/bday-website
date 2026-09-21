@@ -4,6 +4,11 @@ import BackgroundMusic from "../components/BackgroundMusic.tsx";
 // TEMP placeholder for the final gifts photo. Replace this import with your own
 // image once you add it, e.g. `import giftsImg from "../assets/gifts.jpeg";`
 import giftsImg from "../assets/present.jpeg";
+import undoIcon from "../assets/undo.png";
+import redoIcon from "../assets/redo.png";
+import menuIcon from "../assets/menu.png";
+// The line drawing the user decorates. Drawing is constrained to this picture.
+import canvasBgImg from "../assets/drawing-to-decorate.jpeg";
 import "../style.css";
 
 const FOLK_TRACK =
@@ -39,7 +44,8 @@ const sentences = [
   '(now i spend the money on other things haha).',
   'So i wanted this activity to be a combination of both!',
   'I drew a picture of us',
-  'and then you are gonna decorate it like decorating photos!',
+  'and then you are gonna decorate it in the empty spaces',
+  'or you can also colour in my drawing!',
   'Have funn!!'
 ]
 
@@ -58,18 +64,28 @@ function PresentPage() {
       : null;
 
   // Intro sentences play first, then the drawing canvas is revealed, then the
-  // "redeem" preview screen, then the final gifts screen.
+  // "redeem" preview screen, then the final gifts screen. On reload we restore
+  // whichever of draw/redeem/final we were on (so a refresh on the drawing
+  // screen comes back to the drawing, not the intro).
   const [phase, setPhase] = useState<"intro" | "draw" | "redeem" | "final">(
-    storedDrawing && (storedPhase === "redeem" || storedPhase === "final")
-      ? (storedPhase as "redeem" | "final")
+    storedPhase === "draw" || storedPhase === "redeem" || storedPhase === "final"
+      ? (storedPhase as "draw" | "redeem" | "final")
       : "intro"
   );
 
   // True once the user has actually drawn a stroke, so the Save button shows.
   const [hasDrawn, setHasDrawn] = useState(false);
 
-  // Snapshot of the drawing (data URL) shown on the redeem screen.
+  // Strokes only (transparent bg) — used to keep editing when going back.
   const [savedDrawing, setSavedDrawing] = useState<string | null>(storedDrawing);
+
+  // The picture + strokes flattened together — shown on the redeem screen and
+  // downloaded. Persisted so a reload restores the preview.
+  const storedComposite =
+    typeof sessionStorage !== "undefined"
+      ? sessionStorage.getItem("present:composite")
+      : null;
+  const [savedComposite, setSavedComposite] = useState<string | null>(storedComposite);
   const [index, setIndex] = useState(0);
   const [visible, setVisible] = useState(true);
   const [showHint, setShowHint] = useState(false);
@@ -82,19 +98,50 @@ function PresentPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const contextRef = useRef<CanvasRenderingContext2D | null>(null);
   const isDrawingRef = useRef(false);
+  // Last pointer position in a stroke, used to smooth the line with quadratic
+  // curves (midpoint smoothing) instead of hard straight segments.
+  const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+  // The decorated line drawing, loaded once so we can paint it under the user's
+  // strokes when saving.
+  const bgImageRef = useRef<HTMLImageElement | null>(null);
  
   const pickerCanvasRef = useRef<HTMLCanvasElement>(null);
   const isPickingRef = useRef(false);
   const [selectedColor, setSelectedColor] = useState("black");
+
+  // Live preview of the color under the cursor/finger on the palette.
+  const [hoverColor, setHoverColor] = useState<string | null>(null);
+
+  // Read the palette color at a screen position and update the preview bar.
+  // Used by React hover handlers on the palette (reliable on desktop).
+  const previewPaletteAt = (clientX: number, clientY: number) => {
+    const canvas = pickerCanvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.max(0, Math.min(canvas.width - 1, (clientX - rect.left) * (canvas.width / rect.width)));
+    const y = Math.max(0, Math.min(canvas.height - 1, (clientY - rect.top) * (canvas.height / rect.height)));
+    const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
+    setHoverColor(`rgb(${r}, ${g}, ${b})`);
+  };
  
   const [isErasing, setIsErasing] = useState(false);
   const isErasingRef = useRef(false);
-  const ERASER_SIZE = 20;
+
+  // Adjustable pen + eraser sizes. Refs mirror the state so the native touch
+  // handlers (which close over the effect) always read the current values.
+  const [penSize, setPenSize] = useState(5);
+  const penSizeRef = useRef(5);
+  const [eraserSize, setEraserSize] = useState(20);
+  const eraserSizeRef = useRef(20);
+
+  // Whether the tools panel is expanded (collapsed by default behind the menu).
+  const [menuOpen, setMenuOpen] = useState(false);
  
   const [zoom, setZoom] = useState(1);
   const zoomRef = useRef(1);
   const MIN_ZOOM = 0.5;
-  const MAX_ZOOM = 3;
+  const MAX_ZOOM = 5;
   const logicalSizeRef = useRef({ width: 0, height: 0 }); // fixed drawing-space size, set once
  
   // Pinch-to-zoom tracking
@@ -120,47 +167,156 @@ function PresentPage() {
     startPanY: number;
   } | null>(null);
  
+  // ---- Undo / redo history ----
+  // Each entry is a full-resolution snapshot of the canvas. We snapshot the
+  // canvas right before a stroke changes it (the "before" state), so undo can
+  // put that back. Redo replays states that were undone.
+  const undoStackRef = useRef<ImageData[]>([]);
+  const redoStackRef = useRef<ImageData[]>([]);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
+  const syncHistoryButtons = () => {
+    setCanUndo(undoStackRef.current.length > 0);
+    setCanRedo(redoStackRef.current.length > 0);
+  };
+
+  // Save the current canvas pixels so a following stroke can be undone.
+  const pushUndoSnapshot = () => {
+    const canvas = canvasRef.current;
+    const context = contextRef.current;
+    if (!canvas || !context) return;
+    undoStackRef.current.push(context.getImageData(0, 0, canvas.width, canvas.height));
+    // A fresh action invalidates any redo history.
+    redoStackRef.current = [];
+    syncHistoryButtons();
+  };
+
+  const undo = () => {
+    const canvas = canvasRef.current;
+    const context = contextRef.current;
+    if (!canvas || !context || undoStackRef.current.length === 0) return;
+    // Current state goes onto the redo stack, previous state is restored.
+    redoStackRef.current.push(context.getImageData(0, 0, canvas.width, canvas.height));
+    const previous = undoStackRef.current.pop()!;
+    context.putImageData(previous, 0, 0);
+    setHasDrawn(undoStackRef.current.length > 0 || !isBlank(previous));
+    syncHistoryButtons();
+  };
+
+  const redo = () => {
+    const canvas = canvasRef.current;
+    const context = contextRef.current;
+    if (!canvas || !context || redoStackRef.current.length === 0) return;
+    undoStackRef.current.push(context.getImageData(0, 0, canvas.width, canvas.height));
+    const next = redoStackRef.current.pop()!;
+    context.putImageData(next, 0, 0);
+    setHasDrawn(true);
+    syncHistoryButtons();
+  };
+
+  // Cheap check for a fully transparent snapshot (used to hide Save after undo).
+  const isBlank = (data: ImageData) => {
+    const px = data.data;
+    for (let i = 3; i < px.length; i += 4) {
+      if (px[i] !== 0) return false;
+    }
+    return true;
+  };
+
   // Keep refs in sync with state so native (non-React) listeners always see current values
   useEffect(() => {
     isErasingRef.current = isErasing;
   }, [isErasing]);
+
+  // Pen size drives the stroke width; eraser size only affects erasing.
+  useEffect(() => {
+    penSizeRef.current = penSize;
+    if (contextRef.current) contextRef.current.lineWidth = penSize;
+  }, [penSize]);
+
+  useEffect(() => {
+    eraserSizeRef.current = eraserSize;
+  }, [eraserSize]);
  
-  // Initial canvas setup (runs once the drawing phase mounts the canvas)
+  // Initial canvas setup (runs once the drawing phase mounts the canvas).
+  // The canvas is sized and positioned to exactly cover the reference picture,
+  // so the user can only draw within that image. The picture itself is shown as
+  // the canvas background; strokes land on the transparent canvas above it.
   useEffect(() => {
     if (phase !== "draw") return;
     const canvas = canvasRef.current;
     if (!canvas) return;
- 
-    logicalSizeRef.current = { width: window.innerWidth, height: window.innerHeight };
- 
-    canvas.width = window.innerWidth * 2;
-    canvas.height = window.innerHeight * 2;
-    canvas.style.position = "absolute";
-    canvas.style.left = "0px";
-    canvas.style.top = "0px";
-    canvas.style.width = `${window.innerWidth}px`;
-    canvas.style.height = `${window.innerHeight}px`;
-    panRef.current = { x: 0, y: 0 };
- 
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    context.scale(2, 2);
-    context.lineCap = "round";
-    context.strokeStyle = selectedColor;
-    context.lineWidth = 5;
-    contextRef.current = context;
 
-    // If we're returning from the redeem screen, repaint the saved drawing so
-    // "Go back" keeps what was drawn. The snapshot is full-resolution, and the
-    // context is scaled 2x, so draw it at the logical (CSS) size.
-    if (savedDrawing) {
-      const img = new Image();
-      img.onload = () => {
-        context.drawImage(img, 0, 0, logicalSizeRef.current.width, logicalSizeRef.current.height);
-      };
-      img.src = savedDrawing;
-      setHasDrawn(true);
-    }
+    const bg = new Image();
+    bg.onload = () => {
+      bgImageRef.current = bg;
+
+      // Fit the picture inside the viewport, leaving a margin so the tools panel
+      // and buttons don't overlap it.
+      const marginX = 32;
+      const marginY = 32;
+      const availW = window.innerWidth - marginX * 2;
+      const availH = window.innerHeight - marginY * 2;
+      const scale = Math.min(availW / bg.width, availH / bg.height);
+      const boxW = Math.round(bg.width * scale);
+      const boxH = Math.round(bg.height * scale);
+
+      logicalSizeRef.current = { width: boxW, height: boxH };
+
+      // Backing store at 2x for crisp strokes.
+      canvas.width = boxW * 2;
+      canvas.height = boxH * 2;
+      canvas.style.position = "absolute";
+      canvas.style.width = `${boxW}px`;
+      canvas.style.height = `${boxH}px`;
+
+      // Show the picture behind the (transparent) drawing surface.
+      canvas.style.backgroundImage = `url(${canvasBgImg})`;
+      canvas.style.backgroundSize = "100% 100%";
+      canvas.style.backgroundRepeat = "no-repeat";
+
+      // Center the picture in the container.
+      const container = scrollContainerRef.current;
+      const cw = container?.clientWidth ?? window.innerWidth;
+      const ch = container?.clientHeight ?? window.innerHeight;
+
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.scale(2, 2);
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      context.imageSmoothingEnabled = true;
+      context.strokeStyle = selectedColor;
+      context.lineWidth = penSizeRef.current;
+      contextRef.current = context;
+
+      // Reset zoom to 100% and center via the pan offset.
+      zoomRef.current = 1;
+      setZoom(1);
+      applyView(1, (cw - boxW) / 2, (ch - boxH) / 2);
+
+      // Fresh canvas -> start with empty history.
+      undoStackRef.current = [];
+      redoStackRef.current = [];
+      syncHistoryButtons();
+
+      // Restore prior strokes: prefer the in-progress draft (survives a reload
+      // on the drawing screen), otherwise the last saved drawing (used when
+      // coming back from the redeem screen). Both are strokes only, sized to the
+      // logical box.
+      const draft = sessionStorage.getItem("present:draft");
+      const toRestore = draft ?? savedDrawing;
+      if (toRestore) {
+        const img = new Image();
+        img.onload = () => {
+          context.drawImage(img, 0, 0, boxW, boxH);
+        };
+        img.src = toRestore;
+        setHasDrawn(true);
+      }
+    };
+    bg.src = canvasBgImg;
   }, [phase]);
  
   // Keep the pen color in sync with whatever's picked
@@ -174,16 +330,20 @@ function PresentPage() {
   const beginStroke = (x: number, y: number) => {
     if (!contextRef.current) return;
     const context = contextRef.current;
+    // Snapshot the canvas before this stroke changes it, so it can be undone.
+    pushUndoSnapshot();
     if (isErasingRef.current) {
       context.save();
       context.globalCompositeOperation = "destination-out";
       context.beginPath();
-      context.arc(x, y, ERASER_SIZE / 2, 0, Math.PI * 2);
+      context.arc(x, y, eraserSizeRef.current / 2, 0, Math.PI * 2);
       context.fill();
       context.restore();
     } else {
       context.beginPath();
       context.moveTo(x, y);
+      // Start smoothing from this point.
+      lastPointRef.current = { x, y };
       // A pen stroke started -> there's now something on the canvas, reveal Save.
       setHasDrawn(true);
     }
@@ -197,17 +357,38 @@ function PresentPage() {
       context.save();
       context.globalCompositeOperation = "destination-out";
       context.beginPath();
-      context.arc(x, y, ERASER_SIZE / 2, 0, Math.PI * 2);
+      context.arc(x, y, eraserSizeRef.current / 2, 0, Math.PI * 2);
       context.fill();
       context.restore();
     } else {
-      context.lineTo(x, y);
+      // Midpoint smoothing: curve from the last midpoint through the previous
+      // raw point (used as the control) to the new midpoint. This rounds the
+      // line so quick mouse movements don't create hard, sharp corners. Each
+      // segment is its own sub-path so repeated strokes don't over-darken.
+      const last = lastPointRef.current ?? { x, y };
+      const midX = (last.x + x) / 2;
+      const midY = (last.y + y) / 2;
+      context.quadraticCurveTo(last.x, last.y, midX, midY);
       context.stroke();
+      context.beginPath();
+      context.moveTo(midX, midY);
+      lastPointRef.current = { x, y };
     }
   };
  
   const endStroke = () => {
     isDrawingRef.current = false;
+    lastPointRef.current = null;
+    // Persist the in-progress drawing so a reload on the drawing screen restores
+    // it (not just the last saved version).
+    const canvas = canvasRef.current;
+    if (canvas) {
+      try {
+        sessionStorage.setItem("present:draft", canvas.toDataURL("image/png"));
+      } catch {
+        // Ignore quota / serialization errors — persistence is best-effort.
+      }
+    }
   };
  
   const toggleEraser = () => {
@@ -218,56 +399,77 @@ function PresentPage() {
     const canvas = canvasRef.current;
     const context = contextRef.current;
     if (!canvas || !context) return;
+    // Let Reset be undone: snapshot the current pixels first.
+    pushUndoSnapshot();
     context.clearRect(0, 0, canvas.width, canvas.height);
     setHasDrawn(false);
+    sessionStorage.removeItem("present:draft");
+  };
+
+  // Leave the drawing screen back to the gifts page. The drawing itself is kept
+  // (draft persists), but we reset the stored screen to the intro so coming back
+  // replays the messages. A "Go to drawing" button then jumps straight back in.
+  const leaveToGifts = () => {
+    sessionStorage.setItem("present:phase", "intro");
+    navigate("/gifts");
   };
 
   // Reset the whole experience: clear the saved drawing and the visited flags so
   // the Present relocks (gifts must be reopened), then go back to the home page.
   const resetEverything = () => {
     sessionStorage.removeItem("present:drawing");
+    sessionStorage.removeItem("present:draft");
+    sessionStorage.removeItem("present:composite");
     sessionStorage.removeItem("present:phase");
     sessionStorage.removeItem("visited:camera");
     sessionStorage.removeItem("visited:envelope");
     navigate("/");
   };
 
-  // Snapshot the current canvas and move to the redeem preview screen. The
-  // snapshot is persisted so reloading the redeem/final pages keeps the drawing.
+  // Snapshot the canvas and move to the redeem preview screen. We keep two
+  // images: the strokes alone (to keep editing on "Go back") and a flattened
+  // picture+strokes composite (shown on the redeem screen and downloaded).
   const handleSave = () => {
     const canvas = canvasRef.current;
+    const bg = bgImageRef.current;
     if (!canvas) return;
-    const dataUrl = canvas.toDataURL("image/png");
-    setSavedDrawing(dataUrl);
-    sessionStorage.setItem("present:drawing", dataUrl);
+
+    // Strokes only, at the logical box size, for re-editing later.
+    const strokes = canvas.toDataURL("image/png");
+
+    // Flatten the picture under the strokes onto a white background.
+    const out = document.createElement("canvas");
+    out.width = canvas.width;
+    out.height = canvas.height;
+    const ctx = out.getContext("2d");
+    let composite = strokes;
+    if (ctx) {
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, out.width, out.height);
+      if (bg) ctx.drawImage(bg, 0, 0, out.width, out.height);
+      ctx.drawImage(canvas, 0, 0);
+      composite = out.toDataURL("image/png");
+    }
+
+    setSavedDrawing(strokes);
+    setSavedComposite(composite);
+    sessionStorage.setItem("present:drawing", strokes);
+    sessionStorage.setItem("present:draft", strokes);
+    sessionStorage.setItem("present:composite", composite);
     sessionStorage.setItem("present:phase", "redeem");
     setPhase("redeem");
   };
 
-  // Download the saved drawing as a PNG (on a white background, since the
-  // canvas itself is transparent), then move on to the final gifts screen.
+  // Download the flattened picture+strokes PNG, then move to the final screen.
   const downloadDrawing = () => {
-    if (!savedDrawing) return;
-    const img = new Image();
-    img.onload = () => {
-      const out = document.createElement("canvas");
-      out.width = img.width;
-      out.height = img.height;
-      const ctx = out.getContext("2d");
-      if (ctx) {
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, out.width, out.height);
-        ctx.drawImage(img, 0, 0);
-      }
-      const link = document.createElement("a");
-      link.href = out.toDataURL("image/png");
-      link.download = "our-drawing.png";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      setPhase("final");
-    };
-    img.src = savedDrawing;
+    if (!savedComposite) return;
+    const link = document.createElement("a");
+    link.href = savedComposite;
+    link.download = "our-drawing.png";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setPhase("final");
   };
  
   // ---- Zoom helpers ----
@@ -510,15 +712,36 @@ function PresentPage() {
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     };
  
+    // Read the palette color at a canvas pixel (returns "rgb(...)").
+    const readColor = (x: number, y: number) => {
+      const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
+      return `rgb(${r}, ${g}, ${b})`;
+    };
+
     const getColorAt = (x: number, y: number) => {
-      const imageData = ctx.getImageData(x, y, 1, 1);
-      const [r, g, b] = imageData.data;
-      setSelectedColor(`rgb(${r}, ${g}, ${b})`);
+      setSelectedColor(readColor(x, y));
+    };
+
+    // Update the preview swatch to the color under the cursor/finger.
+    const updateHover = (clientX: number, clientY: number) => {
+      const { x, y } = getCanvasCoords(clientX, clientY);
+      setHoverColor(readColor(x, y));
     };
  
     const getCanvasCoords = (clientX: number, clientY: number) => {
       const rect = canvas.getBoundingClientRect();
-      return { x: clientX - rect.left, y: clientY - rect.top };
+      // Map from the displayed (CSS) size to the canvas's internal pixel size,
+      // so the picked color matches where you actually clicked even when the
+      // palette is displayed at a different size (mobile width / panel scale).
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const x = (clientX - rect.left) * scaleX;
+      const y = (clientY - rect.top) * scaleY;
+      // Clamp so a click on the very edge still reads a valid pixel.
+      return {
+        x: Math.max(0, Math.min(canvas.width - 1, x)),
+        y: Math.max(0, Math.min(canvas.height - 1, y)),
+      };
     };
  
     const handleMouseDown = (e: MouseEvent) => {
@@ -527,20 +750,22 @@ function PresentPage() {
       getColorAt(x, y);
     };
     const handleMouseMove = (e: MouseEvent) => {
-      if (!isPickingRef.current) return;
-      const { x, y } = getCanvasCoords(e.clientX, e.clientY);
-      getColorAt(x, y);
+      if (isPickingRef.current) {
+        const { x, y } = getCanvasCoords(e.clientX, e.clientY);
+        getColorAt(x, y);
+      }
     };
     const handleMouseUp = () => {
       isPickingRef.current = false;
     };
- 
+
     const handleTouchStart = (e: TouchEvent) => {
       e.preventDefault();
       isPickingRef.current = true;
       const touch = e.touches[0];
       const { x, y } = getCanvasCoords(touch.clientX, touch.clientY);
       getColorAt(x, y);
+      updateHover(touch.clientX, touch.clientY);
     };
     const handleTouchMove = (e: TouchEvent) => {
       if (!isPickingRef.current) return;
@@ -548,9 +773,11 @@ function PresentPage() {
       const touch = e.touches[0];
       const { x, y } = getCanvasCoords(touch.clientX, touch.clientY);
       getColorAt(x, y);
+      updateHover(touch.clientX, touch.clientY);
     };
     const handleTouchEnd = () => {
       isPickingRef.current = false;
+      setHoverColor(null);
     };
  
     buildColorPalette();
@@ -570,7 +797,8 @@ function PresentPage() {
       canvas.removeEventListener("touchmove", handleTouchMove);
       canvas.removeEventListener("touchend", handleTouchEnd);
     };
-  }, [phase]);
+    // Re-run when the panel opens, since the picker canvas mounts only then.
+  }, [phase, menuOpen]);
  
   // ---- Intro sentence reveal (envelope-style) ----
   useEffect(() => {
@@ -600,15 +828,11 @@ function PresentPage() {
     if (phase === "final") popConfetti();
   }, [phase]);
 
-  // Keep the persisted phase in sync once a drawing exists, so a reload on the
-  // redeem/final screens comes back to the same screen. While re-editing on the
-  // draw screen we clear it, so a reload there falls back to the intro instead
-  // of skipping ahead to a stale redeem screen.
+  // Persist the current screen so a reload comes back to it (including the
+  // drawing screen). Intro isn't persisted.
   useEffect(() => {
-    if (phase === "redeem" || phase === "final") {
+    if (phase === "draw" || phase === "redeem" || phase === "final") {
       sessionStorage.setItem("present:phase", phase);
-    } else if (phase === "draw") {
-      sessionStorage.removeItem("present:phase");
     }
   }, [phase]);
 
@@ -628,16 +852,31 @@ function PresentPage() {
       >
         <BackgroundMusic track={FOLK_TRACK} />
  
-        <button
-          type="button"
-          className="btn letter__back"
-          onClick={(e) => {
-            e.stopPropagation();
-            navigate("/gifts");
-          }}
-        >
-          Back
-        </button>
+        <div className="letter__top-buttons">
+          <button
+            type="button"
+            className="btn letter__back"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate("/gifts");
+            }}
+          >
+            Back
+          </button>
+
+          {sessionStorage.getItem("present:draft") && (
+            <button
+              type="button"
+              className="btn letter__back letter__resume"
+              onClick={(e) => {
+                e.stopPropagation();
+                setPhase("draw");
+              }}
+            >
+              Go to drawing
+            </button>
+          )}
+        </div>
  
         <div className="letter__stage">
           <p className={`letter__sentence${visible ? " is-visible" : ""}`}>
@@ -673,12 +912,12 @@ function PresentPage() {
 
         <div className="gifts__content present-screen">
           <h1 className="present-title">
-            Yay! Now send it to me to redeem your present!
+            Yay! Now download the drawing to redeem your present!
           </h1>
 
-          {savedDrawing && (
+          {savedComposite && (
             <img
-              src={savedDrawing}
+              src={savedComposite}
               alt="Your drawing"
               className="present-preview"
             />
@@ -742,43 +981,107 @@ function PresentPage() {
         />
       </div>
  
-      <div className="gifts__content present-tools" style={{ position: "absolute", top: 16, right: 16 }}>
-        <canvas
-          ref={pickerCanvasRef}
-          className="color-palette"
-          width={284}
-          height={155}
-          style={{ touchAction: "none" }}
-        />
-        <div style={{ marginTop: 8 }}>
-          <span
-            style={{
-              display: "inline-block",
-              width: 16,
-              height: 16,
-              backgroundColor: selectedColor,
-              border: "1px solid #ccc",
-              verticalAlign: "middle",
-              marginRight: 8,
-            }}
-          />
-          {selectedColor}
+      {/* Hamburger toggle: opens/closes the tools panel. */}
+      <button
+        type="button"
+        className="btn drawing-menu-toggle"
+        aria-label={menuOpen ? "Close tools" : "Open tools"}
+        title="Tools"
+        onClick={() => setMenuOpen((o) => !o)}
+      >
+        <img src={menuIcon} alt="Tools" className="drawing-menu-icon" />
+      </button>
+
+      {/* Tools panel (below the menu button). It floats above the canvas and
+          doesn't block drawing on the rest of the picture. */}
+      {menuOpen && (
+        <div className="gifts__content present-tools">
+            {/* Preview of the color under the cursor/finger, shown above the
+                palette so it's never clipped by the panel. */}
+            <div
+              className="color-hover-preview"
+              style={{ backgroundColor: hoverColor ?? selectedColor }}
+            />
+
+            <div className="color-palette-wrap">
+              <canvas
+                ref={pickerCanvasRef}
+                className="color-palette"
+                width={284}
+                height={155}
+                style={{ touchAction: "none" }}
+                onMouseMove={(e) => previewPaletteAt(e.clientX, e.clientY)}
+                onMouseLeave={() => setHoverColor(null)}
+              />
+            </div>
+
+            <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+              <button onClick={toggleEraser} className="btn drawing-button">
+                {isErasing ? "Switch to Drawing" : "Switch to Eraser"}
+              </button>
+              <button onClick={resetCanvas} className="btn drawing-button">Reset</button>
+            </div>
+
+            {/* Size slider: pen size while drawing, eraser size while erasing. */}
+            {isErasing ? (
+              <div className="tools-slider">
+                <label htmlFor="eraser-size" className="tools-text-blur">
+                  Eraser size: {eraserSize}
+                </label>
+                <input
+                  id="eraser-size"
+                  type="range"
+                  min={5}
+                  max={80}
+                  value={eraserSize}
+                  onChange={(e) => setEraserSize(Number(e.target.value))}
+                />
+              </div>
+            ) : (
+              <div className="tools-slider">
+                <label htmlFor="pen-size" className="tools-text-blur">
+                  Pen size: {penSize}
+                </label>
+                <input
+                  id="pen-size"
+                  type="range"
+                  min={1}
+                  max={40}
+                  value={penSize}
+                  onChange={(e) => setPenSize(Number(e.target.value))}
+                />
+              </div>
+            )}
+
+            <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+              <button
+                onClick={undo}
+                disabled={!canUndo}
+                className="btn drawing-button drawing-icon-button"
+                aria-label="Undo"
+                title="Undo"
+              >
+                <img src={undoIcon} alt="Undo" className="drawing-icon" />
+              </button>
+              <button
+                onClick={redo}
+                disabled={!canRedo}
+                className="btn drawing-button drawing-icon-button"
+                aria-label="Redo"
+                title="Redo"
+              >
+                <img src={redoIcon} alt="Redo" className="drawing-icon" />
+              </button>
+            </div>
+
+            <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+              <button onClick={zoomOut} className="btn drawing-button">−</button>
+              <span className="tools-text-blur">{Math.round(zoom * 100)}%</span>
+              <button onClick={zoomIn} className="btn drawing-button">+</button>
+              <button onClick={resetZoom} className="btn drawing-button">Reset Zoom</button>
+            </div>
         </div>
- 
-        <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-          <button onClick={toggleEraser} className="btn drawing-button">
-            {isErasing ? "Switch to Drawing" : "Switch to Eraser"}
-          </button>
-          <button onClick={resetCanvas} className="btn drawing-button">Reset</button>
-        </div>
- 
-        <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
-          <button onClick={zoomOut} className="btn drawing-button">−</button>
-          <span>{Math.round(zoom * 100)}%</span>
-          <button onClick={zoomIn} className="btn drawing-button">+</button>
-          <button onClick={resetZoom} className="btn drawing-button">Reset Zoom</button>
-        </div>
-      </div>
+      )}
 
       <button
         type="button"
@@ -802,7 +1105,8 @@ function PresentPage() {
         <div className="modal-overlay" onClick={() => setShowLeavePopup(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <p className="modal-text">
-              Your drawing won't be autosaved. Are you sure you want to leave?
+              Your drawing is kept, but you'll see the intro again. You can jump
+              straight back to it with "Go to drawing". Leave now?
             </p>
             <div className="modal-buttons">
               <button
@@ -812,7 +1116,7 @@ function PresentPage() {
               >
                 Cancel
               </button>
-              <button type="button" className="btn" onClick={() => navigate("/gifts")}>
+              <button type="button" className="btn" onClick={leaveToGifts}>
                 Leave
               </button>
             </div>

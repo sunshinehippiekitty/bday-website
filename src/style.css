@@ -108,6 +108,19 @@ body {
   transform: scale(0.97);
 }
 
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn:disabled:hover {
+  background: var(--pink-fill);
+}
+
+.btn:disabled:active {
+  transform: none;
+}
+
 /* ---------- Fade in on load ---------- */
 @keyframes fadeIn {
   from {
@@ -292,6 +305,24 @@ body {
   z-index: 3;
 }
 
+/* Row holding the Back + optional "Go to drawing" buttons on the intro. */
+.letter__top-buttons {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  z-index: 3;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Inside the row, the Back button flows normally instead of pinning itself. */
+.letter__top-buttons .letter__back {
+  position: static;
+  top: auto;
+  left: auto;
+}
+
 .letter__stage {
   display: flex;
   flex-direction: column;
@@ -447,12 +478,112 @@ body {
   padding: 8px 15px;
 }
 
+/* Icon-only buttons (Undo / Redo) */
+.drawing-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+}
+
+.drawing-icon {
+  display: block;
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+
+  @media (max-width: 768px) {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+/* ---------- Collapsible tools panel ---------- */
+/* Hamburger button that opens the panel (top-right of the drawing screen). */
+.drawing-menu-toggle {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 1090;
+  padding: 7px 9px;
+}
+
+.drawing-menu-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+/* Tools panel sits just below the menu button (plain style, floats above the
+   canvas without blocking drawing on the rest of the picture). */
+.present-tools {
+  position: absolute;
+  top: 62px;
+  right: 16px;
+  z-index: 1080;
+  padding: 12px;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.color-palette-wrap {
+  display: inline-block;
+  line-height: 0;
+}
+
+/* Color preview bar above the palette (updates on hover / touch drag). */
+.color-hover-preview {
+  width: 100%;
+  height: 22px;
+  border: 2px solid #fff;
+  border-radius: 6px;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.25);
+  margin-bottom: 6px;
+}
+
+/* Blur background behind just the text bits (color name + slider labels), so
+   they stay readable over the picture. */
+.tools-text-blur {
+  background: rgba(255, 255, 255, 0.35);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: 10px;
+  padding: 4px 8px;
+}
+
+/* Smaller on laptop/desktop so it takes up less of the screen. */
+@media (min-width: 769px) {
+  .present-tools {
+    transform: scale(0.85);
+    transform-origin: top right;
+  }
+}
+
+/* Pen / eraser size sliders. */
+.tools-slider {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #333;
+}
+
+.tools-slider input[type="range"] {
+  width: 100%;
+  accent-color: var(--pink-text);
+}
+
 /* Shrink the whole drawing tool panel on phones so it doesn't cover the canvas. */
 @media (max-width: 768px) {
   .present-tools {
-    top: 8px !important;
-    right: 8px !important;
-    max-width: 65vw;
+    top: 52px;
+    right: 8px;
+    max-width: 72vw;
+    padding: 14px;
     font-size: 15px;
     gap: 5px;
   }
@@ -554,10 +685,8 @@ body {
   width: auto;
   height: auto;
   object-fit: contain;
-  border: 3px solid #ffd6e5;
-  border-radius: 14px;
   background: #fff;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+  box-shadow: 0 10px 30px rgba(245, 173, 255, 0.733);
   margin: 0 0 22px;
 }
 
@@ -568,7 +697,7 @@ body {
   width: auto;
   height: auto;
   object-fit: contain;
-  border-radius: 14px;
+  border-radius: 5px;
   margin: 0 0 22px;
 }
 
