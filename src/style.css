@@ -686,7 +686,7 @@ body {
   height: auto;
   object-fit: contain;
   background: #fff;
-  box-shadow: 0 10px 30px rgba(245, 173, 255, 0.733);
+  box-shadow: 0 5px 20px #e2799f;
   margin: 0 0 22px;
 }
 
