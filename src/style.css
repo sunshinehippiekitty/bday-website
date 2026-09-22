@@ -713,3 +713,57 @@ body {
   font-size: 17px;
   padding: 10px 18px;
 }
+
+/* ---------- Camera page: phone on top, buttons below, video players ---------- */
+.camera-menu {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 28px;
+}
+
+.camera-phone-img {
+  width: 160px;
+  height: 160px;
+
+  @media (max-width: 768px) {
+    width: 120px;
+    height: 120px;
+  }
+}
+
+.camera-player {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+}
+
+.camera-video {
+  display: block;
+  max-width: min(90vw, 640px);
+  max-height: 70vh;
+  width: auto;
+  height: auto;
+  border-radius: 10px;
+  background: #000;
+  box-shadow: 0 10px 30px rgba(245, 173, 255, 0.5);
+}
+
+.camera-yt-wrap {
+  position: relative;
+  width: min(90vw, 640px);
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(245, 173, 255, 0.5);
+}
+
+.camera-yt {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+}
